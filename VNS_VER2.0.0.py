@@ -152,11 +152,14 @@ class Utils:
     @staticmethod
     def d_btw(f:Vehicle or Stop,t : Vehicle or Stop):
         lat_a,lng_a = f.loc; lat_b,lng_b = t.loc;
+        '''
         if(isinstance(f,Stop) and isinstance(t,Stop)):
             k1 = f"[{lat_a} {lng_a}]"; a = index_stops_table[k1];
             k2 = f"[{lat_b} {lng_b}]"; b = index_stops_table[k2];
             return HT.loc(a,b)["distance"];
         else: return Utils.d_btw_approx(f,t)
+        '''
+        return Utils.d_btw_approx(f,t);
         
     @staticmethod
     def d_btw_approx(a:Vehicle or Stop,b : Vehicle or Stop):
@@ -177,13 +180,11 @@ class Utils:
 
     @staticmethod
     def stop_status(v: Vehicle, s : Stop, assigned_route : list):
-        last_stop = time_at_last_stop = None;
+        last_stop,time_at_last_stop  = v,v.time_range[0];
         t_route_weight = t_route_volume = 0;
         current_service_time = datetime.timedelta();
 
-        if(len(assigned_route) == 0):
-            last_stop = v;  time_at_last_stop = v.time_range[0];
-        else:
+        if(len(assigned_route) > 0):
             last_stop = assigned_route[-1]["stop"]; 
             time_at_last_stop = assigned_route[-1]["time"];
             current_service_time = Utils.time2date(last_stop.service_time);
@@ -258,7 +259,7 @@ def cw(v : Vehicle,stops : list):
     time_in_route += Utils.time_btw(v,assigned_route[-1]["stop"]);
     return (assigned_route,time_in_route,invalid_stops);
 
-def create_solution_state(stops: list,vehicles : list):
+def create_solution_state(stops = [Stop],vehicles = [Vehicle]):
     soln = []; k = 0;
     while(len(stops) > 0 and k < len(vehicles)):
         route_info,arrived_time,remianing_stops = cw(vehicles[k],stops);
