@@ -180,27 +180,25 @@ class Utils:
 
     @staticmethod
     def stop_status(v: Vehicle, s : Stop, assigned_route : list):
-        last_stop,time_at_last_stop  = v,v.time_range[0];
-        t_route_weight = t_route_volume = 0;
-        current_service_time = datetime.timedelta();
+        last_stop,t  = v,v.time_range[0];
+        total_weight = total_volume = 0;
+        dt = datetime.timedelta();
 
         if(len(assigned_route) > 0):
             last_stop = assigned_route[-1]["stop"]; 
-            time_at_last_stop = assigned_route[-1]["time"];
-            current_service_time = Utils.time2date(last_stop.service_time);
-            t_route_weight = sum([e["stop"].weight for e in assigned_route]);
-            t_route_volume = sum([e["stop"].volume for e in assigned_route]);
+            t,dt = assigned_route[-1]["time"],Utils.time2date(last_stop.service_time);
+            total_weight = sum([e["stop"].weight for e in assigned_route]);
+            total_volume = sum([e["stop"].volume for e in assigned_route]);
 
-        assigned_route_time = time_at_last_stop + \
-                    current_service_time + Utils.time_btw(last_stop,s)
+        time_in_route = t + dt + Utils.time_btw(last_stop,s)
 
-        stop_status = assigned_route_time < s.time_range[1] and \
-                t_route_volume + s.volume <= v.volume and \
-                t_route_weight + s.weight <= v.weight and \
-                assigned_route_time + Utils.time_btw(s,v) + \
+        stop_status = time_in_route < s.time_range[1] and \
+                total_volume + s.volume <= v.volume and \
+                total_weight + s.weight <= v.weight and \
+                time_in_route + Utils.time_btw(s,v) + \
                     Utils.time2date(s.service_time) < v.time_range[1];
 
-        return (stop_status,assigned_route_time);
+        return (stop_status,time_in_route); #Not include service time of s
     
     #╚(•⌂•)╝
     @staticmethod
@@ -212,9 +210,9 @@ class Utils:
 
         for k in range(idx,len(soln["route"])):
             e = soln["route"][k];
-            t = Utils.arrive_time(current_stop,e["stop"],time);
-            service_time = Utils.time2date(e["stop"].service_time)
-            e["time"],time,current_stop = t, t + service_time, e["stop"];
+            time = Utils.arrive_time(current_stop,e["stop"],time);
+            service_time = Utils.time2date(e["stop"].service_time);
+            e["time"],time,current_stop = time, time + service_time, e["stop"];
     
     @staticmethod 
     def evaluate(soln = [{"vehicle":Vehicle,"route":[{"stop":Stop,"time":datetime}]}] ):
@@ -222,100 +220,95 @@ class Utils:
         for state in soln:
             current_loc = state["vehicle"];
             time = state["vehicle"].time_range[0];
-            for s2 in state["route"]:
-                d += Utils.d_btw(current_loc,s2["stop"]);
-                current_loc = s2["stop"];
-                time = s2["time"] + Utils.time2date(current_loc.service_time);
+            for ans in state["route"]:
+                d += Utils.d_btw(current_loc,ans["stop"]);
+                current_loc = ans["stop"];
+                time = ans["time"] + Utils.time2date(current_loc.service_time);
             d += Utils.d_btw(current_loc,state["vehicle"]);
         return d;
         
 def cw(v : Vehicle,stops : list):
-    assigned_route,invalid_stops  = [],[];
     for s in stops: s.fitness = Utils.arrive_time(v,s,v.time_range[0]); 
-    h = Min_heap(stops); s = h.deQ();
+    h,assigned_route,invalid_stops = Min_heap(stops),[],[];
 
-    # time => recent time for "that" stop.
-    status,time = Utils.stop_status(v,s,assigned_route);
-    assigned_route.append({"stop":s,"time" : time}); 
-    time_in_route = time + Utils.time2date(s.service_time);
-
-    #reassign fitness val in heap and update
-    for stop in h.data: stop.fitness = Utils.arrive_time(s,stop,time_in_route);
-    h = Min_heap(h.data); 
-
-    #create assigned route
     while(h.size() > 0):
         s = h.deQ();
         if(s.vehicle == None):
             status,time = Utils.stop_status(v,s,assigned_route);
             if(status == True):
                 assigned_route.append({"stop" : s, "time" : time});
-                s.vehicle = v.id; h.data += invalid_stops; invalid_stops = [];
-                time_in_route = time + Utils.time2date(s.service_time);
-                for stp in stops: stp.fitness = Utils.arrive_time(s,stp,time_in_route);
-                h = Min_heap(h.data); continue;
+                s.vehicle = v.id; invalid_stops += h.data;
+                time += Utils.time2date(s.service_time);
+                for stp in stops: stp.fitness = Utils.arrive_time(s,stp,time);
+                h = Min_heap(invalid_stops); invalid_stops = []; continue;
         invalid_stops.append(s);
 
-    time_in_route += Utils.time_btw(v,assigned_route[-1]["stop"]);
-    return (assigned_route,time_in_route,invalid_stops);
+    time += Utils.time_btw(v,assigned_route[-1]["stop"]);
+    return (assigned_route,time,invalid_stops);
 
 def create_solution_state(stops = [Stop],vehicles = [Vehicle]):
     soln = []; k = 0;
-    while(len(stops) > 0 and k < len(vehicles)):
-        route_info,arrived_time,remianing_stops = cw(vehicles[k],stops);
-        soln.append({"vehicle" : vehicles[k], "route" : route_info});
-        stops = remianing_stops; k += 1;
+    for k in range(len(vehicles)):
+        route,arrived_time,remianing_stops = cw(vehicles[k],stops);
+        soln.append({"vehicle" : vehicles[k], "route" : route});
+        if(len(remianing_stops) == 0): break;
+        stops = remianing_stops;
     return soln;
 
 def create_neighbours(solution=[{"vehicle":Vehicle,"route":[{"stop":Stop,"time":datetime}]}]):
+    # neighbourhood made by remove ans in route1 and insert insert in route2.
+
     new_soln = copy.deepcopy(solution);
     #random select 2 route
     r1,r2 = random.randint(0, len(solution)-1),random.randint(0,len(solution)-2)
-    if r1 <= r2 : r2 += 1; # equally possiblity.
+    if r1 <= r2 : r2 += 1; # equally random possiblity.
     soln_1,soln_2 = new_soln[r1],new_soln[r2]
-    if(len(soln_1["route"]) == 0): return new_soln; 
+    route1 = soln_1["route"]; route2 = soln_2["route"];
+    if(len(route1) == 0): return new_soln; 
 
     #remove random stop in route1
-    rm1 = random.randint(0, len(soln_1["route"])-1);
-    route1 = soln_1["route"]; route2 = soln_2["route"]
-
-    stop1 = route1[rm1]; route1.remove(stop1);
+    rm1 = random.randint(0, len(route1)-1);
+    rm_ans = route1[rm1]; route1.remove(rm_ans);
     if(len(route1) > 0) : Utils.update_time(soln_1,rm1);
 
-    min_d = 1e9; min_id = -1;
+    #insert removed stop into route2 (find best position to insert)
+    min_d = 5e8; min_id = 0;
     current_location,current_time = soln_2["vehicle"],soln_2["vehicle"].time_range[0];
-    for stop2 in route2:
-        s1,s2 = stop1["stop"],stop2["stop"];
-        d = Utils.d_btw(s1,current_location) 
-        t = current_time + Utils.time2date(d) + Utils.time2date(s1.service_time)
+    for ans2 in route2:
+        s1,s2 = rm_ans["stop"],ans2["stop"];
+        d = Utils.d_btw(current_location,s1) 
+        current_time += Utils.time2date(d) + Utils.time2date(s1.service_time)
         d +=  Utils.d_btw(s1,s2) 
-        if(d < min_d): min_d = d; min_id = route2.index(stop2);
+        if(d < min_d): min_d = d; min_id = route2.index(ans2);
         
-    route2.insert(min_id,stop1);
+    route2.insert(min_id,rm_ans);
     Utils.update_time(soln_2,min_id);
     return new_soln;
 
 
-def local_search(soln = [{"vehicle":Vehicle,"route":[{"stop":Stop,"time":datetime}]}]):
-    LS_ITER = 10; current_soln = soln;
-    for k in range(LS_ITER):
-        neighbours = create_neighbours(current_soln);
+def local_search(soln = [{"vehicle":Vehicle,"route":[{"stop":Stop,"time":datetime}]}],i = 0):
+    LS_ITER = 50; current_soln = soln;
+    for _ in range(LS_ITER):
+        neighbours = create_neighbours(current_soln);  i += 1;
         post,pre = Utils.evaluate(neighbours),Utils.evaluate(current_soln);
         if(post < pre):
             current_soln = neighbours;
-            print(f"New Solution Found: {post} iter: {k}");
+            print(f"New Solution Found: {post} iter: {i}");
+    return i,current_soln;
         
-def vns(solution : list):
-    VNS_ITR = 2;
+def vns(solution = [{"vehicle":Vehicle,"route":[{"stop":Stop,"time":datetime}]}]):
+    VNS_ITR = 2; i = 0;best_soln = solution;
     for _ in range(VNS_ITR):
-        local_search(solution);
+        i,best_soln = local_search(best_soln,i);
+        #pertube();
+    #print(best_soln);
     
 def main():
     solution_states = create_solution_state(stops,vehicles)
     vns(solution_states);
 
 #Read data.
-random.seed(0)
+#random.seed(0)
 vehicles = [Vehicle(v) for v in pd.read_excel(PATH, \
     sheet_name='vehicles', header=1,usecols="A:L").to_dict('records')];
 stops = pd.read_excel(PATH, sheet_name='stops', header=1,usecols="A:J");
@@ -324,6 +317,7 @@ stops["vehicle"] = None;
 stops = [Stop(s) for s in stops.to_dict('records')];
 
 #Building Cache.
+'''
 print("Building a cache ...");
 exe_fn = [Utils.generate_all]; HT = SHTable(latlng);
 index_stops_table = dict();
@@ -341,5 +335,5 @@ for i in range(len(latlng)):
     for j in range(len(latlng)):
         if(HT.loc(i,j) == None): print("Problem at ",i,j);
 print("Pass!");
-
+'''
 main();
